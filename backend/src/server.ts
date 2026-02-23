@@ -23,6 +23,14 @@ app.use(
 app.use(express.json());
 app.use(requestLogger);
 
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "xswap-backend",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use("/api", routes);
 
 app.use(notFoundHandler);
