@@ -1,0 +1,43 @@
+{
+  "name": "xswap",
+  "version": "1.0.0",
+  "description": "Swap tokens on Monad blockchain via xSwap with Kuru DEX integration",
+  "author": "xSwap Team",
+  "homepage": "https://xswap.io",
+  "platform": ["clawbot", "openclaw", "nanobot"],
+  "commands": {
+    "swap": {
+      "description": "Swap tokens with best prices on Monad",
+      "usage": [
+        "swap <amount> <from> to <to>",
+        "swap 1.5 MON to USDC",
+        "swap 100 USDC to AUSD"
+      ]
+    },
+    "balance": {
+      "description": "Check your wallet balances",
+      "usage": ["balance", "balance MON", "balance USDC"]
+    },
+    "quote": {
+      "description": "Get price quote without swapping",
+      "usage": ["quote 1 MON to USDC", "quote 10 USDC to MON"]
+    },
+    "history": {
+      "description": "View recent transactions",
+      "usage": ["history", "history 10"]
+    }
+  },
+  "env": {
+    "required": ["XSWAP_API_KEY", "XSWAP_API_SECRET", "BOT_PRIVATE_KEY"],
+    "optional": ["XSWAP_API_URL"]
+  },
+  "example": {
+    "env": "XSWAP_API_KEY=xsk_xxx XSWAP_API_SECRET=xss_xxx BOT_PRIVATE_KEY=0x...",
+    "npm_install": "npm install ethers"
+  },
+  "security": {
+    "note": "BOT_PRIVATE_KEY must NEVER be shared or sent to any server. It is used only for local transaction signing.",
+    "warning": "Only use API keys from official xSwap dashboard. Never share your API secret."
+  },
+  "disclaimer": "This skill interacts with smart contracts on Monad mainnet. Use at your own risk. xSwap is not responsible for any losses."
+}

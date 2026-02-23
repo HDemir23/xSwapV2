@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  walletAddress String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  sessions      Session[]
+  transactions  Transaction[]
+  apiKeys       ApiKey[]
+  
+  @@index([walletAddress])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Transaction {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  txHash          String    @unique
+  type            String    @default("swap")
+  
+  tokenInAddress  String
+  tokenInSymbol   String
+  tokenInAmount   String
+  
+  tokenOutAddress String
+  tokenOutSymbol  String
+  tokenOutAmount  String
+  
+  feeAmount       String
+  feeToken        String
+  
+  status          String    @default("pending")
+  blockNumber     BigInt?
+  
+  createdAt       DateTime  @default(now())
+  confirmedAt     DateTime?
+  
+  @@index([userId])
+  @@index([txHash])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+model ApiKey {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  apiKey       String    @unique
+  apiSecret    String
+  botName      String?
+  walletAddress String
+  isActive     Boolean   @default(true)
+  
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime?
+  
+  @@index([apiKey])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model Token {
+  id            String    @id @default(cuid())
+  address       String    @unique
+  symbol        String
+  name          String
+  decimals      Int
+  logoUrl       String?
+  isNative      Boolean   @default(false)
+  isVerified    Boolean   @default(false)
+  
+  priceUsd      Float?
+  priceUpdatedAt DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([address])
+  @@index([symbol])
+  @@map("tokens")
+}
+
+model Market {
+  id            String   @id @default(cuid())
+  address       String   @unique
+  baseAsset     String
+  quoteAsset    String
+  vaultAddress  String
+  
+  tickSize      Int
+  sizePrecision Int
+  pricePrecision Int
+  minSize       String
+  maxSize       String
+  takerFeeBps   Int
+  makerFeeBps   Int
+  
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([address])
+  @@index([baseAsset])
+  @@index([quoteAsset])
+  @@map("markets")
+}
+
+model MarketIndex {
+  id               String   @id @default(cuid())
+  lastIndexedBlock BigInt   @default(0)
+  updatedAt        DateTime @updatedAt
+  
+  @@map("market_index")
+}
+
+model SavedQuote {
+  id            String   @id
+  userAddress   String
+  tokenIn       String
+  tokenOut      String
+  amountIn      String
+  amountOut     String
+  platformFee   String
+  slippage      Float
+  route         String
+  buildResponse String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  
+  @@index([id])
+  @@index([userAddress])
+  @@index([expiresAt])
+  @@map("saved_quotes")
+}
