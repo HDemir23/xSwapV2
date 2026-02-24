@@ -45,8 +45,13 @@ const startServer = async () => {
     await prisma.$connect();
     console.log("[Server] Database connected");
 
-    console.log("[Server] Initializing market discovery...");
-    await marketDiscoveryService.initialize();
+    console.log("[Server] Initializing market discovery (background)...");
+    marketDiscoveryService.initialize().catch((err) => {
+      console.error(
+        "[Server] Market discovery init failed (non-critical):",
+        err.message,
+      );
+    });
 
     app.listen(config.port, () => {
       console.log(`[Server] xSwap Backend running on port ${config.port}`);

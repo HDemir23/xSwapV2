@@ -19,13 +19,23 @@ export class MarketDiscoveryService {
   private isIndexing: boolean = false;
 
   constructor() {
-    this.provider = new ethers.providers.JsonRpcProvider(config.monad.rpcUrl);
+    this.provider = new ethers.providers.JsonRpcProvider(config.monad.rpcUrl, {
+      name: "monad",
+      chainId: 143,
+    });
   }
 
   async initialize(): Promise<void> {
     console.log("[MarketDiscovery] Initializing market discovery service...");
-    await this.indexMarkets();
-    this.startEventListening();
+    try {
+      await this.indexMarkets();
+      this.startEventListening();
+    } catch (error) {
+      console.error(
+        "[MarketDiscovery] Failed to initialize, will retry later:",
+        error,
+      );
+    }
   }
 
   async indexMarkets(): Promise<void> {
