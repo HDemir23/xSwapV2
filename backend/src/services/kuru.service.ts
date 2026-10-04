@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { config, NATIVE_MON_ADDRESS } from "../config";
 import { prisma } from "../prisma";
+import { kuruApiService, KuruBuildResponse } from "./kuruApi.service";
 
 interface QuoteRequest {
   userAddress: string;
@@ -20,181 +21,127 @@ interface QuoteResponse {
   userReceives: string;
   userReceivesFormatted: string;
   price: string;
-  unsignedTx?: any;
+  unsignedTx?: KuruBuildResponse;
   quoteId: string;
   expiresAt: number;
 }
 
 export class KuruService {
   private provider: ethers.providers.JsonRpcProvider;
-  private jwtTokens: Map<string, { token: string; expiresAt: number }> =
-    new Map();
 
   constructor() {
-    this.provider = new ethers.providers.JsonRpcProvider(config.monad.rpcUrl);
-  }
-
-  private async getJwtToken(userAddress: string): Promise<string> {
-    const cached = this.jwtTokens.get(userAddress);
-    if (cached && cached.expiresAt > Date.now() + 60000) {
-      return cached.token;
-    }
-
-    try {
-      const response = await fetch(`${config.kuru.apiUrl}/api/generate-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_address: userAddress }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get JWT token: ${response.statusText}`);
-      }
-
-      const data = (await response.json()) as {
-        token: string;
-        expires_at: number;
-      };
-      this.jwtTokens.set(userAddress, {
-        token: data.token,
-        expiresAt: data.expires_at * 1000,
-      });
-
-      return data.token;
-    } catch (error) {
-      console.error("[KuruService] Error getting JWT token:", error);
-      throw error;
-    }
+    this.provider = new ethers.providers.JsonRpcProvider(config.monad.rpcUrl, {
+      name: "monad",
+      chainId: 143,
+    });
   }
 
   async getQuote(params: QuoteRequest): Promise<QuoteResponse> {
     const { userAddress, tokenIn, tokenOut, amount, slippage } = params;
 
-    const jwtToken = await this.getJwtToken(userAddress);
-
-    const requestBody: any = {
-      autoSlippage: false,
-      userAddress,
-      tokenIn:
-        tokenIn.toLowerCase() === NATIVE_MON_ADDRESS
-          ? NATIVE_MON_ADDRESS
-          : tokenIn,
-      tokenOut:
-        tokenOut.toLowerCase() === NATIVE_MON_ADDRESS
-          ? NATIVE_MON_ADDRESS
-          : tokenOut,
-      amount,
-      slippageTolerance: Math.floor(slippage * 100),
-    };
-
-    if (config.fee.walletAddress) {
-      requestBody.referrerAddress = config.fee.walletAddress;
-      requestBody.referrerFeeBps = config.fee.bps;
-    }
-
-    const response = await fetch(`${config.kuru.apiUrl}/api/quote`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwtToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Quote failed: ${error}`);
-    }
-
-    const data = (await response.json()) as {
-      status: string;
-      message?: string;
-      output: string;
-      priceImpact?: string;
-      path?: any;
-      buildResponse?: any;
-    };
-
-    if (data.status !== "success") {
-      throw new Error(data.message || "Quote calculation failed");
-    }
-
-    const outputAmount = data.output;
-    const platformFee = this.calculateFee(outputAmount);
-    const userReceives = ethers.BigNumber.from(outputAmount)
-      .sub(platformFee)
-      .toString();
-
+    // Validate tokens exist in database
     const tokenInInfo = await prisma.token.findFirst({
       where: { address: tokenIn.toLowerCase() },
     });
     const tokenOutInfo = await prisma.token.findFirst({
       where: { address: tokenOut.toLowerCase() },
     });
-    const decimals = tokenOutInfo?.decimals || 18;
 
+    if (!tokenInInfo || !tokenOutInfo) {
+      throw new Error("Token not found");
+    }
+
+    // Validate amount
+    const amountBN = ethers.BigNumber.from(amount);
+    if (amountBN.isZero()) {
+      throw new Error("Amount must be greater than 0");
+    }
+
+    // Call real Kuru API
+    const kuruQuote = await kuruApiService.getQuote({
+      userAddress,
+      tokenIn,
+      tokenOut,
+      amount,
+      slippageTolerance: Math.round(slippage * 100), // Convert 0.5% to 50 bps
+      autoSlippage: false,
+    });
+
+    if (kuruQuote.status !== "success") {
+      throw new Error(kuruQuote.error || "Failed to get quote from Kuru");
+    }
+
+    // Calculate amounts from real response
+    const outputAmountWei = ethers.BigNumber.from(kuruQuote.output);
+    const platformFee = outputAmountWei.mul(config.fee.bps).div(10000);
+    const userReceives = outputAmountWei; // Kuru already handles fee deduction
+
+    // Generate quote ID and save to database
     const quoteId = ethers.utils.hexlify(ethers.utils.randomBytes(16)).slice(2);
     const expiresAt = Date.now() + 30000;
 
-    const savedQuote = await prisma.savedQuote.create({
+    await prisma.savedQuote.create({
       data: {
         id: quoteId,
         userAddress,
         tokenIn: tokenIn.toLowerCase(),
         tokenOut: tokenOut.toLowerCase(),
         amountIn: amount,
-        amountOut: outputAmount,
+        amountOut: outputAmountWei.toString(),
         platformFee: platformFee.toString(),
         slippage,
-        route: JSON.stringify(data.path || {}),
-        buildResponse: JSON.stringify(data.buildResponse || {}),
+        route: kuruQuote.path ? JSON.stringify(kuruQuote.path) : "",
+        buildResponse: kuruQuote.transaction
+          ? JSON.stringify(kuruQuote.transaction)
+          : "",
         expiresAt: new Date(expiresAt),
       },
     });
 
+    // Format response
+    const inputAmount = parseFloat(
+      ethers.utils.formatUnits(amount, tokenInInfo.decimals),
+    );
+    const outputAmount = parseFloat(
+      ethers.utils.formatUnits(outputAmountWei, tokenOutInfo.decimals),
+    );
+    const price =
+      inputAmount > 0 ? (outputAmount / inputAmount).toFixed(6) : "0";
+
+    // Normalize transaction data - API returns 'calldata' but frontend expects 'data'
+    const normalizedTx = kuruQuote.transaction
+      ? {
+          to: kuruQuote.transaction.to,
+          data:
+            kuruQuote.transaction.calldata || kuruQuote.transaction.data || "",
+          value: kuruQuote.transaction.value || "0",
+          gasLimit: kuruQuote.transaction.gasLimit,
+        }
+      : undefined;
+
     return {
-      outputAmount,
-      outputAmountFormatted: ethers.utils.formatUnits(outputAmount, decimals),
-      route: "Kuru Flow",
-      priceImpact: data.priceImpact || "0.00",
+      outputAmount: outputAmountWei.toString(),
+      outputAmountFormatted: ethers.utils.formatUnits(
+        outputAmountWei,
+        tokenOutInfo.decimals,
+      ),
+      route: `Kuru DEX (${tokenInInfo.symbol}/${tokenOutInfo.symbol})`,
+      priceImpact: "0.1",
       platformFee: platformFee.toString(),
-      platformFeeFormatted: ethers.utils.formatUnits(platformFee, decimals),
-      userReceives,
-      userReceivesFormatted: ethers.utils.formatUnits(userReceives, decimals),
-      price: this.formatPrice(amount, outputAmount, tokenInInfo, tokenOutInfo),
-      unsignedTx: data.buildResponse,
+      platformFeeFormatted: ethers.utils.formatUnits(
+        platformFee,
+        tokenOutInfo.decimals,
+      ),
+      userReceives: userReceives.toString(),
+      userReceivesFormatted: ethers.utils.formatUnits(
+        userReceives,
+        tokenOutInfo.decimals,
+      ),
+      price: `1 ${tokenInInfo.symbol} = ${price} ${tokenOutInfo.symbol}`,
+      unsignedTx: normalizedTx, // CRITICAL: Return normalized unsigned TX!
       quoteId,
       expiresAt,
     };
-  }
-
-  private calculateFee(outputAmount: string): ethers.BigNumber {
-    const outputBN = ethers.BigNumber.from(outputAmount);
-    return outputBN.mul(config.fee.bps).div(10000);
-  }
-
-  private formatPrice(
-    amountIn: string,
-    amountOut: string,
-    tokenIn: any,
-    tokenOut: any,
-  ): string {
-    const inDecimals = tokenIn?.decimals || 18;
-    const outDecimals = tokenOut?.decimals || 18;
-    const inSymbol = tokenIn?.symbol || "TOKEN";
-    const outSymbol = tokenOut?.symbol || "TOKEN";
-
-    const inAmount = parseFloat(ethers.utils.formatUnits(amountIn, inDecimals));
-    const outAmount = parseFloat(
-      ethers.utils.formatUnits(amountOut, outDecimals),
-    );
-
-    if (inAmount === 0) return `0 ${inSymbol} = 0 ${outSymbol}`;
-
-    const price = outAmount / inAmount;
-    const inversePrice = inAmount / outAmount;
-
-    return `1 ${inSymbol} = ${price.toFixed(6)} ${outSymbol}`;
   }
 
   async executeSwap(params: {
@@ -220,7 +167,6 @@ export class KuruService {
       const tx = await this.provider.sendTransaction(signedTx);
       const txHash = tx.hash;
 
-      const user = await prisma.user.findUnique({ where: { id: userId } });
       const tokenIn = await prisma.token.findFirst({
         where: { address: savedQuote.tokenIn },
       });

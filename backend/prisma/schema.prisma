@@ -113,13 +113,13 @@ model Market {
   quoteAsset    String
   vaultAddress  String
   
-  tickSize      Int
-  sizePrecision Int
-  pricePrecision Int
+  tickSize      String
+  sizePrecision String
+  pricePrecision String
   minSize       String
   maxSize       String
-  takerFeeBps   Int
-  makerFeeBps   Int
+  takerFeeBps   String
+  makerFeeBps   String
   
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())

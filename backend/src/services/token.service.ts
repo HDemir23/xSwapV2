@@ -1,6 +1,8 @@
 import { ethers } from "ethers";
-import { config, NATIVE_MON_ADDRESS, WMON_ADDRESS } from "../config";
+import { config } from "../config";
+import { NATIVE_MON_ADDRESS } from "@shared/constants";
 import { prisma } from "../prisma";
+import type { Token, Balance } from "@shared/types";
 
 const ERC20_ABI = [
   "function symbol() view returns (string)",
@@ -10,23 +12,6 @@ const ERC20_ABI = [
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
 ];
-
-interface TokenInfo {
-  address: string;
-  symbol: string;
-  name: string;
-  decimals: number;
-  logoUrl?: string;
-  priceUsd?: number;
-  isNative?: boolean;
-}
-
-interface Balance {
-  token: TokenInfo;
-  balance: string;
-  balanceFormatted: string;
-  valueUsd?: number;
-}
 
 export class TokenService {
   private provider: ethers.providers.JsonRpcProvider;
@@ -39,7 +24,7 @@ export class TokenService {
     this.provider = new ethers.providers.JsonRpcProvider(config.monad.rpcUrl);
   }
 
-  async getTokenList(): Promise<TokenInfo[]> {
+  async getTokenList(): Promise<Token[]> {
     const tokens = await prisma.token.findMany({
       orderBy: { symbol: "asc" },
     });
@@ -55,7 +40,7 @@ export class TokenService {
     }));
   }
 
-  async getTokenByAddress(address: string): Promise<TokenInfo | null> {
+  async getTokenByAddress(address: string): Promise<Token | null> {
     const normalizedAddress = address.toLowerCase();
 
     const token = await prisma.token.findUnique({
@@ -152,6 +137,13 @@ export class TokenService {
     }
 
     try {
+      const token = await prisma.token.findUnique({
+        where: { address: tokenAddress.toLowerCase() },
+      });
+
+      const decimals = token?.decimals ?? 18;
+      const amountBN = ethers.utils.parseUnits(amount, decimals);
+
       const tokenContract = new ethers.Contract(
         tokenAddress,
         ERC20_ABI,
@@ -161,7 +153,6 @@ export class TokenService {
         walletAddress,
         config.kuru.flowEntrypoint,
       );
-      const amountBN = ethers.BigNumber.from(amount);
 
       return {
         needsApproval: allowance.lt(amountBN),

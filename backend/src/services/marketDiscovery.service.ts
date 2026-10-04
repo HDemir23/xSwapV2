@@ -1,14 +1,7 @@
 import { ethers } from "ethers";
+import * as KuruSdk from "@kuru-labs/kuru-sdk";
 import { config, NATIVE_MON_ADDRESS } from "../config";
 import { prisma } from "../prisma";
-
-const ERC20_ABI = [
-  "function symbol() view returns (string)",
-  "function name() view returns (string)",
-  "function decimals() view returns (uint8)",
-  "function totalSupply() view returns (uint256)",
-  "function balanceOf(address) view returns (uint256)",
-];
 
 const ROUTER_ABI = [
   "event MarketRegistered(address indexed baseAsset, address indexed quoteAsset, address market, address vaultAddress, uint32 pricePrecision, uint96 sizePrecision, uint32 tickSize, uint96 minSize, uint96 maxSize, uint256 takerFeeBps, uint256 makerFeeBps, uint96 kuruAmmSpread)",
@@ -31,10 +24,7 @@ export class MarketDiscoveryService {
       await this.indexMarkets();
       this.startEventListening();
     } catch (error) {
-      console.error(
-        "[MarketDiscovery] Failed to initialize, will retry later:",
-        error,
-      );
+      console.error("[MarketDiscovery] Failed to initialize:", error);
     }
   }
 
@@ -77,35 +67,53 @@ export class MarketDiscoveryService {
         `[MarketDiscovery] Indexing from block ${fromBlock} to ${toBlock}`,
       );
 
-      const chunkSize = 10000;
-      let processedBlocks = fromBlock;
+      const chunkSize = 100;
+      const parallelChunks = 50;
 
-      for (let start = fromBlock; start < toBlock; start += chunkSize) {
-        const end = Math.min(start + chunkSize, toBlock);
+      for (
+        let batchStart = fromBlock;
+        batchStart < toBlock;
+        batchStart += chunkSize * parallelChunks
+      ) {
+        const promises: Promise<ethers.Event[]>[] = [];
 
-        try {
-          const filter = routerContract.filters.MarketRegistered();
-          const events = await routerContract.queryFilter(filter, start, end);
+        for (let i = 0; i < parallelChunks; i++) {
+          const start = batchStart + i * chunkSize;
+          const end = Math.min(start + chunkSize - 1, toBlock);
 
+          if (start <= toBlock) {
+            promises.push(
+              routerContract
+                .queryFilter(
+                  routerContract.filters.MarketRegistered(),
+                  start,
+                  end,
+                )
+                .catch(() => []),
+            );
+          }
+        }
+
+        const results = await Promise.all(promises);
+
+        for (const events of results) {
           for (const event of events) {
             await this.processMarketEvent(event as ethers.Event);
           }
+        }
 
-          processedBlocks = end;
+        const processedTo = Math.min(
+          batchStart + chunkSize * parallelChunks,
+          toBlock,
+        );
 
-          await prisma.marketIndex.update({
-            where: { id: marketIndex.id },
-            data: { lastIndexedBlock: BigInt(end) },
-          });
+        await prisma.marketIndex.update({
+          where: { id: marketIndex.id },
+          data: { lastIndexedBlock: BigInt(processedTo) },
+        });
 
-          console.log(
-            `[MarketDiscovery] Processed blocks ${start} to ${end}, found ${events.length} markets`,
-          );
-        } catch (error) {
-          console.error(
-            `[MarketDiscovery] Error processing blocks ${start}-${end}:`,
-            error,
-          );
+        if (batchStart % 100000 === 0) {
+          console.log(`[MarketDiscovery] Processed up to block ${processedTo}`);
         }
       }
 
@@ -119,30 +127,22 @@ export class MarketDiscoveryService {
 
   private async processMarketEvent(event: ethers.Event): Promise<void> {
     try {
-      const {
-        baseAsset,
-        quoteAsset,
-        market,
-        vaultAddress,
-        pricePrecision,
-        sizePrecision,
-        tickSize,
-        minSize,
-        maxSize,
-        takerFeeBps,
-        makerFeeBps,
-      } = event.args as any;
+      const { baseAsset, quoteAsset, market, vaultAddress } = event.args as any;
 
       const existingMarket = await prisma.market.findUnique({
         where: { address: market },
       });
 
       if (existingMarket) {
-        console.log(
-          `[MarketDiscovery] Market ${market} already exists, skipping`,
-        );
         return;
       }
+
+      console.log(`[MarketDiscovery] Processing new market: ${market}`);
+
+      const marketParams = await KuruSdk.ParamFetcher.getMarketParams(
+        this.provider,
+        market,
+      );
 
       await prisma.market.create({
         data: {
@@ -150,13 +150,13 @@ export class MarketDiscoveryService {
           baseAsset: baseAsset.toLowerCase(),
           quoteAsset: quoteAsset.toLowerCase(),
           vaultAddress: vaultAddress.toLowerCase(),
-          tickSize: tickSize.toNumber(),
-          sizePrecision: sizePrecision.toNumber(),
-          pricePrecision: pricePrecision.toNumber(),
-          minSize: minSize.toString(),
-          maxSize: maxSize.toString(),
-          takerFeeBps: takerFeeBps.toNumber(),
-          makerFeeBps: makerFeeBps.toNumber(),
+          tickSize: marketParams.tickSize.toString(),
+          sizePrecision: marketParams.sizePrecision.toString(),
+          pricePrecision: marketParams.pricePrecision.toString(),
+          minSize: marketParams.minSize.toString(),
+          maxSize: marketParams.maxSize.toString(),
+          takerFeeBps: marketParams.takerFeeBps.toString(),
+          makerFeeBps: marketParams.makerFeeBps.toString(),
         },
       });
 
@@ -173,29 +173,30 @@ export class MarketDiscoveryService {
     try {
       const address = tokenAddress.toLowerCase();
 
-      if (address === NATIVE_MON_ADDRESS) {
-        const existing = await prisma.token.findUnique({ where: { address } });
-        if (!existing) {
-          await prisma.token.create({
-            data: {
-              address,
-              symbol: "MON",
-              name: "Monad",
-              decimals: 18,
-              isNative: true,
-            },
-          });
-          console.log("[MarketDiscovery] Indexed native MON token");
-        }
-        return;
-      }
-
       const existing = await prisma.token.findUnique({ where: { address } });
       if (existing) return;
 
+      if (address === NATIVE_MON_ADDRESS) {
+        await prisma.token.create({
+          data: {
+            address,
+            symbol: "MON",
+            name: "Monad",
+            decimals: 18,
+            isNative: true,
+          },
+        });
+        console.log("[MarketDiscovery] Indexed native MON token");
+        return;
+      }
+
       const tokenContract = new ethers.Contract(
         tokenAddress,
-        ERC20_ABI,
+        [
+          "function symbol() view returns (string)",
+          "function name() view returns (string)",
+          "function decimals() view returns (uint8)",
+        ],
         this.provider,
       );
 

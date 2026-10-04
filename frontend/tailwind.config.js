@@ -7,27 +7,34 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        "bg-primary": "#1A1415",
-        "bg-secondary": "#2D2023",
-        "bg-card": "#3D2C30",
-        "bg-hover": "#4D3C40",
+        // Uniswap-style dark theme
+        "bg-primary": "#0D0D0D",
+        "bg-secondary": "#1B1A1A",
+        "bg-card": "#1B1A1A",
+        "bg-hover": "#2B2B2B",
+        // Pink accent (Uniswap style)
+        "pink-primary": "#FF007A",
+        "pink-hover": "#FF3392",
+        // Text colors
+        "text-primary": "#FFFFFF",
+        "text-secondary": "#9B9B9B",
+        "text-muted": "#5E5E5E",
+        // Status colors
+        success: "#22C55E",
+        warning: "#EAB308",
+        error: "#EF4444",
+        info: "#3B82F6",
+        // Legacy aliases for backwards compatibility
         "sakura-light": "#FFE4E8",
-        "sakura-medium": "#FFB7C5",
+        "sakura-medium": "#FF007A",
         "sakura-dark": "#E8909C",
-        "sakura-accent": "#FF69B4",
-        "text-primary": "#FFF5F6",
-        "text-secondary": "#D4A5A9",
-        "text-muted": "#9D7F84",
-        success: "#7CB342",
-        warning: "#FFB347",
-        error: "#FF6B6B",
-        info: "#87CEEB",
+        "sakura-accent": "#FF3392",
       },
       borderRadius: {
-        sm: "4px",
-        md: "8px",
-        lg: "12px",
-        xl: "16px",
+        sm: "12px",
+        md: "16px",
+        lg: "20px",
+        xl: "24px",
       },
     },
   },

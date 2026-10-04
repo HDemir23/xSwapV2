@@ -1,4 +1,15 @@
 import { ethers } from "ethers";
+import {
+  shortenAddress,
+  formatUsd as sharedFormatUsd,
+  formatNumber,
+} from "@shared/utils/format";
+
+export { shortenAddress, formatNumber };
+
+export function formatUsd(amount: number): string {
+  return sharedFormatUsd(amount);
+}
 
 export function isValidAddress(address: string): boolean {
   return ethers.utils.isAddress(address);
@@ -41,27 +52,4 @@ export function parseUnits(amount: string, decimals: number): ethers.BigNumber {
   } catch {
     return ethers.BigNumber.from(0);
   }
-}
-
-export function shortenAddress(address: string, chars = 4): string {
-  if (!address) return "";
-  return `${address.slice(0, chars + 2)}...${address.slice(-chars)}`;
-}
-
-export function formatUsd(amount: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
-
-export function formatNumber(num: number, decimals = 4): string {
-  if (num === 0) return "0";
-  if (num < 0.0001) return num.toExponential(2);
-  return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals,
-  }).format(num);
 }

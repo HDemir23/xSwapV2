@@ -3,6 +3,14 @@ import { authMiddleware } from "../middleware/auth.middleware";
 import { kuruService } from "../services/kuru.service";
 import { tokenService } from "../services/token.service";
 import { apiLimiter } from "../middleware/errorHandler";
+import { validateBody, validateParams, validateQuery } from "../middleware/validate";
+import {
+  addressParamSchema,
+  tokenParamSchema,
+  quoteRequestSchema,
+  executeRequestSchema,
+  paginationSchema,
+} from "../validators";
 
 const router = Router();
 
@@ -16,39 +24,39 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-router.get("/:address", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const address = String(req.params.address);
-    const token = await tokenService.getTokenByAddress(address);
+router.get(
+  "/:address",
+  validateParams(addressParamSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const address = req.params.address as string;
+      const token = await tokenService.getTokenByAddress(address);
 
-    if (!token) {
-      res.status(404).json({ error: "Token not found" });
-      return;
+      if (!token) {
+        res.status(404).json({ error: "Token not found" });
+        return;
+      }
+
+      res.json({ token });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch token" });
     }
-
-    res.json({ token });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch token" });
-  }
-});
+  },
+);
 
 router.post(
   "/quote",
   apiLimiter,
-  authMiddleware,
+  validateBody(quoteRequestSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { tokenIn, tokenOut, amount, slippage = 0.5 } = req.body;
+      const { tokenIn, tokenOut, amount, slippage } = req.body;
 
-      if (!tokenIn || !tokenOut || !amount) {
-        res
-          .status(400)
-          .json({ error: "tokenIn, tokenOut, and amount are required" });
-        return;
-      }
+      const userAddress =
+        req.user?.walletAddress || "0x0000000000000000000000000000000000000000";
 
       const quote = await kuruService.getQuote({
-        userAddress: req.user!.walletAddress,
+        userAddress,
         tokenIn,
         tokenOut,
         amount,
@@ -56,9 +64,10 @@ router.post(
       });
 
       res.json(quote);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to get quote";
       console.error("[SwapRoute] Quote error:", error);
-      res.status(500).json({ error: error.message || "Failed to get quote" });
+      res.status(500).json({ error: message });
     }
   },
 );
@@ -67,14 +76,10 @@ router.post(
   "/execute",
   apiLimiter,
   authMiddleware,
+  validateBody(executeRequestSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { signedTx, quoteId } = req.body;
-
-      if (!signedTx || !quoteId) {
-        res.status(400).json({ error: "signedTx and quoteId are required" });
-        return;
-      }
 
       const result = await kuruService.executeSwap({
         signedTx,
@@ -86,11 +91,10 @@ router.post(
         ...result,
         explorerUrl: kuruService.getExplorerUrl(result.txHash),
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to execute swap";
       console.error("[SwapRoute] Execute error:", error);
-      res
-        .status(500)
-        .json({ error: error.message || "Failed to execute swap" });
+      res.status(500).json({ error: message });
     }
   },
 );
@@ -98,9 +102,11 @@ router.post(
 router.get(
   "/allowance/:token",
   authMiddleware,
+  validateParams(tokenParamSchema),
+  validateQuery(paginationSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { token } = req.params;
+      const token = req.params.token as string;
       const { amount } = req.query;
 
       if (!amount) {
@@ -110,7 +116,7 @@ router.get(
 
       const allowance = await tokenService.checkAllowance(
         req.user!.walletAddress,
-        String(token),
+        token,
         String(amount),
       );
 
@@ -124,13 +130,14 @@ router.get(
 router.post(
   "/approve/:token",
   authMiddleware,
+  validateParams(tokenParamSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { token } = req.params;
+      const token = req.params.token as string;
       const { amount } = req.body;
 
       const tx = await tokenService.getApprovalTransaction(
-        String(token),
+        token,
         amount ? String(amount) : undefined,
       );
 

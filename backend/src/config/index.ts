@@ -52,5 +52,19 @@ export const config = {
   },
 };
 
-export const NATIVE_MON_ADDRESS = "0x0000000000000000000000000000000000000000";
-export const WMON_ADDRESS = "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A";
+// Startup validation for fee configuration
+if (!config.fee.walletAddress) {
+  console.warn(
+    "[Config] WARNING: FEE_WALLET_ADDRESS not set - referral fees will not be collected!",
+  );
+} else {
+  console.log(`[Config] Fee wallet configured: ${config.fee.walletAddress}`);
+}
+
+if (config.fee.bps < 0 || config.fee.bps > 10000) {
+  console.warn(
+    "[Config] WARNING: PLATFORM_FEE_BPS should be between 0 and 10000 (0-100%)",
+  );
+}
+
+export { NATIVE_MON_ADDRESS, WMON_ADDRESS } from "@shared/constants";
